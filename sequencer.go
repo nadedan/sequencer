@@ -1,11 +1,15 @@
 package sequencer
 
-import "time"
+import (
+	"time"
+
+	"github.com/nadedan/sequencer/pkg/cache"
+)
 
 type s[T any] struct {
 	jitter time.Duration
 
-	packets *cache[SeqNum, T]
+	packets *cache.Cache[SeqNum, T]
 
 	next chan T
 }
@@ -17,7 +21,7 @@ type (
 func New[T any](jitter time.Duration) *s[T] {
 	newS := &s[T]{
 		jitter:  jitter,
-		packets: newCache[SeqNum, T](),
+		packets: cache.New[SeqNum, T](),
 		next:    make(chan T, 10),
 	}
 
