@@ -26,6 +26,8 @@ type S[N constraints.Integer, P any] struct {
 	next    chan P
 
 	mut sync.RWMutex
+
+	primed bool
 }
 
 func New[N constraints.Integer, P any](jitter time.Duration) *S[N, P] {
@@ -46,6 +48,10 @@ func (s *S[N, P]) Add(n N, p P) {
 
 	s.mut.Lock()
 	switch {
+	case !s.primed:
+		s.primed = true
+		s.nextSeqId = n
+		fallthrough
 	case n > s.maxSeqId:
 		s.maxSeqId = n
 		fallthrough
@@ -108,7 +114,7 @@ func (s *S[N, P]) waitForNext() {
 func (s *S[N, P]) emitPackets(timedOut bool) {
 	s.mut.Lock()
 	defer s.mut.Unlock()
-	if timedOut {
+	if timedOut && s.maxSeqId > s.nextSeqId {
 		s.nextSeqId = s.maxSeqId
 	}
 
