@@ -22,17 +22,24 @@ func TestSequencer(t *testing.T) {
 	testCases := []testCase{
 		{
 			name:       "normal in order",
-			jitter:     10 * time.Millisecond,
+			jitter:     3 * time.Millisecond,
 			stepTime:   1 * time.Millisecond,
 			seqNums:    []int{0, 1, 2, 3, 4, 5},
 			expSeqNums: []int{0, 1, 2, 3, 4, 5},
 		},
 		{
 			name:       "out of order with enough time",
-			jitter:     10 * time.Millisecond,
+			jitter:     3 * time.Millisecond,
 			stepTime:   1 * time.Millisecond,
 			seqNums:    []int{2, 1, 0, 3, 4, 5},
 			expSeqNums: []int{0, 1, 2, 3, 4, 5},
+		},
+		{
+			name:       "out of order not enough time",
+			jitter:     2 * time.Millisecond,
+			stepTime:   1 * time.Millisecond,
+			seqNums:    []int{3, 2, 1, 0, 4, 5},
+			expSeqNums: []int{3, 4, 5},
 		},
 	}
 

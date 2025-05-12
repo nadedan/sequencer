@@ -98,6 +98,7 @@ func (s *S[N, P]) waitForNext() {
 			if !ok {
 				return
 			}
+			timer.Reset(s.jitter)
 			timedOut = false
 		}
 		s.emitPackets(timedOut)
