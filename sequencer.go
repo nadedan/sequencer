@@ -34,6 +34,12 @@ type S[P any] struct {
 	primed bool
 }
 
+// New creates a new sequencer for packet type P
+//
+// Arguments:
+//   - jitter: the amount of time we will wait for the next
+//     in-order sequence number before we drop our queue and move on
+//   - maxSeqId: the maximum sequence id allowed by the protocol
 func New[P any](jitter time.Duration, maxSeqId int) *S[P] {
 	s := &S[P]{
 		jitter:         jitter,
@@ -48,29 +54,34 @@ func New[P any](jitter time.Duration, maxSeqId int) *S[P] {
 	return s
 }
 
+// SetRecoveryWindow allows us to change the recovery window for the resequencer
+//
+// The recovery window is the amount of packets we have to receive, after a
+// timeout, before we start accepting smaller sequnce ids again
 func (s *S[P]) SetRecoveryWindow(w int) {
 	s.recoveryWindow = w
 }
 
-func (s *S[P]) Add(n int, p P) error {
-	if s.inRecovery() && n < s.thisSeqId {
-		return fmt.Errorf("dropping seqId %d: %w", n, ErrInRecovery)
+// Add packets to the sequencer queue
+func (s *S[P]) Add(seqId int, packet P) error {
+	if s.inRecovery() && seqId < s.thisSeqId {
+		return fmt.Errorf("dropping seqId %d: %w", seqId, ErrInRecovery)
 	}
 
-	s.packets.Store(n, p)
+	s.packets.Store(seqId, packet)
 	gotNext := false
 
 	s.mut.Lock()
 	switch {
 	case !s.primed:
 		s.primed = true
-		s.thisSeqId = n
+		s.thisSeqId = seqId
 		fallthrough
-	case n > s.maxReceivedSeqId ||
-		(s.maxReceivedSeqId-n) > s.maxSeqId/2: // detecting a rollover
-		s.maxReceivedSeqId = n
+	case seqId > s.maxReceivedSeqId ||
+		(s.maxReceivedSeqId-seqId) > s.maxSeqId/2: // detecting a rollover
+		s.maxReceivedSeqId = seqId
 		fallthrough
-	case n == s.nextSeqId():
+	case seqId == s.nextSeqId():
 		gotNext = true
 	}
 	s.mut.Unlock()
@@ -82,6 +93,9 @@ func (s *S[P]) Add(n int, p P) error {
 	return nil
 }
 
+// Next returns the next in-order packet from the queue.
+// Returns ErrNoPacketReady if there are no packets
+// ready to be returned
 func (s *S[P]) Next() (*P, error) {
 	select {
 	case p, ok := <-s.next:
@@ -94,6 +108,8 @@ func (s *S[P]) Next() (*P, error) {
 	}
 }
 
+// WaitForNext blocks until a packet can be returned or the context
+// is canceled
 func (s *S[P]) WaitForNext(ctx context.Context) (*P, error) {
 	select {
 	case p, ok := <-s.next:
