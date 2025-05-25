@@ -2,6 +2,7 @@ package sequencer_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -18,6 +19,7 @@ func TestSequencer(t *testing.T) {
 		stepTime   time.Duration
 		seqNums    []int
 		expSeqNums []int
+		expErr     error
 	}
 
 	testCases := []testCase{
@@ -82,8 +84,17 @@ func TestSequencer(t *testing.T) {
 			jitter:     2 * time.Millisecond,
 			maxSeqId:   100,
 			stepTime:   1 * time.Millisecond,
-			seqNums:    []int{97, 98, 99, 3, 2, 1, 0, 4},
-			expSeqNums: []int{97, 98, 99, 1, 2, 3, 4},
+			seqNums:    []int{97, 98, 99, 3, 2, 1, 4, 5, 6},
+			expSeqNums: []int{97, 98, 99, 3, 4, 5, 6},
+		},
+		{
+			name:       "out of order with not enough time prevent stuck packet",
+			jitter:     2 * time.Millisecond,
+			maxSeqId:   100,
+			stepTime:   1 * time.Millisecond,
+			seqNums:    []int{97, 98, 99, 3, 2, 1, 0, 4, 5, 6},
+			expSeqNums: []int{97, 98, 99, 3, 4, 5, 6},
+			expErr:     sequencer.ErrInRecovery,
 		},
 	}
 
@@ -126,7 +137,13 @@ func TestSequencer(t *testing.T) {
 				n := thisTest.seqNums[i]
 
 				t.Logf("Add %d", n)
-				s.Add(n, n)
+				err := s.Add(n, n)
+				if err != nil {
+					if !errors.Is(err, thisTest.expErr) {
+						t.Errorf("did not get expected error '%s', got '%s'", thisTest.expErr, err)
+					}
+					t.Logf("got expected error: %s", err)
+				}
 
 				i++
 			}

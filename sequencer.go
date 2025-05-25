@@ -2,6 +2,7 @@ package sequencer
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -21,6 +22,10 @@ type S[P any] struct {
 	// maxSeqId is the highest sequence number before it rolls over
 	maxSeqId int
 
+	timedOutSeqId  int
+	timedOutFlag   bool
+	recoveryWindow int
+
 	gotNext chan struct{}
 	next    chan P
 
@@ -31,18 +36,27 @@ type S[P any] struct {
 
 func New[P any](jitter time.Duration, maxSeqId int) *S[P] {
 	s := &S[P]{
-		jitter:   jitter,
-		maxSeqId: maxSeqId,
-		packets:  cache.New[int, P](),
-		gotNext:  make(chan struct{}, 10),
-		next:     make(chan P, 10),
+		jitter:         jitter,
+		maxSeqId:       maxSeqId,
+		packets:        cache.New[int, P](),
+		gotNext:        make(chan struct{}, 10),
+		next:           make(chan P, 10),
+		recoveryWindow: 10,
 	}
 
 	go s.waitForNext()
 	return s
 }
 
-func (s *S[P]) Add(n int, p P) {
+func (s *S[P]) SetRecoveryWindow(w int) {
+	s.recoveryWindow = w
+}
+
+func (s *S[P]) Add(n int, p P) error {
+	if s.inRecovery() && n < s.thisSeqId {
+		return fmt.Errorf("dropping seqId %d: %w", n, ErrInRecovery)
+	}
+
 	s.packets.Store(n, p)
 	gotNext := false
 
@@ -64,6 +78,8 @@ func (s *S[P]) Add(n int, p P) {
 	if gotNext {
 		s.gotNext <- struct{}{}
 	}
+
+	return nil
 }
 
 func (s *S[P]) Next() (*P, error) {
@@ -130,6 +146,8 @@ func (s *S[P]) emitPackets(timedOut bool) {
 	}
 
 	if timedOut {
+		s.timedOutFlag = true
+		s.timedOutSeqId = s.maxReceivedSeqId
 		s.packets.Clear()
 	}
 }
@@ -140,4 +158,22 @@ func (s *S[P]) nextSeqId() int {
 	}
 
 	return s.thisSeqId + 1
+}
+
+func (s *S[P]) seqIdDistance(oldest int, newest int) int {
+	if newest < oldest {
+		return s.maxSeqId - (oldest - newest)
+	}
+
+	return newest - oldest
+}
+
+func (s *S[P]) inRecovery() bool {
+	if s.timedOutFlag &&
+		s.seqIdDistance(s.timedOutSeqId, s.thisSeqId) < s.recoveryWindow {
+		return true
+	}
+
+	s.timedOutFlag = false
+	return false
 }
