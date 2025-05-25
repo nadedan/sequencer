@@ -14,6 +14,7 @@ func TestSequencer(t *testing.T) {
 	type testCase struct {
 		name       string
 		jitter     time.Duration
+		maxSeqId   int
 		stepTime   time.Duration
 		seqNums    []int
 		expSeqNums []int
@@ -23,13 +24,15 @@ func TestSequencer(t *testing.T) {
 		{
 			name:       "normal in order",
 			jitter:     3 * time.Millisecond,
+			maxSeqId:   100,
 			stepTime:   1 * time.Millisecond,
-			seqNums:    []int{0, 1, 2, 3, 4, 5},
-			expSeqNums: []int{0, 1, 2, 3, 4, 5},
+			seqNums:    []int{0, 1, 2, 3, 4, 5, 6, 7},
+			expSeqNums: []int{0, 1, 2, 3, 4, 5, 6, 7},
 		},
 		{
 			name:       "out of order with enough time",
 			jitter:     3 * time.Millisecond,
+			maxSeqId:   100,
 			stepTime:   1 * time.Millisecond,
 			seqNums:    []int{0, 2, 1, 3, 4, 5},
 			expSeqNums: []int{0, 1, 2, 3, 4, 5},
@@ -37,6 +40,7 @@ func TestSequencer(t *testing.T) {
 		{
 			name:       "out of order not enough time",
 			jitter:     2 * time.Millisecond,
+			maxSeqId:   100,
 			stepTime:   1 * time.Millisecond,
 			seqNums:    []int{0, 4, 3, 2, 5, 6, 7, 8},
 			expSeqNums: []int{0, 4, 5, 6, 7, 8},
@@ -44,9 +48,42 @@ func TestSequencer(t *testing.T) {
 		{
 			name:       "non-zero start",
 			jitter:     3 * time.Millisecond,
+			maxSeqId:   100,
 			stepTime:   1 * time.Millisecond,
 			seqNums:    []int{1, 2, 3, 4, 5},
 			expSeqNums: []int{1, 2, 3, 4, 5},
+		},
+		{
+			name:       "normal in order with seqId rollover",
+			jitter:     3 * time.Millisecond,
+			maxSeqId:   100,
+			stepTime:   1 * time.Millisecond,
+			seqNums:    []int{97, 98, 99, 100, 0, 1, 2, 3, 4},
+			expSeqNums: []int{97, 98, 99, 100, 0, 1, 2, 3, 4},
+		},
+		{
+			name:       "out of order with enough time with seqId rollover",
+			jitter:     3 * time.Millisecond,
+			maxSeqId:   100,
+			stepTime:   1 * time.Millisecond,
+			seqNums:    []int{97, 98, 99, 100, 1, 0, 2, 3, 4},
+			expSeqNums: []int{97, 98, 99, 100, 0, 1, 2, 3, 4},
+		},
+		{
+			name:       "out of order with enough time across rollover boundary",
+			jitter:     3 * time.Millisecond,
+			maxSeqId:   100,
+			stepTime:   1 * time.Millisecond,
+			seqNums:    []int{97, 98, 99, 1, 100, 0, 2, 3, 4},
+			expSeqNums: []int{97, 98, 99, 100, 0, 1, 2, 3, 4},
+		},
+		{
+			name:       "out of order with not enough time across rollover boundary",
+			jitter:     2 * time.Millisecond,
+			maxSeqId:   100,
+			stepTime:   1 * time.Millisecond,
+			seqNums:    []int{97, 98, 99, 3, 2, 1, 0, 4},
+			expSeqNums: []int{97, 98, 99, 1, 2, 3, 4},
 		},
 	}
 
@@ -56,7 +93,7 @@ func TestSequencer(t *testing.T) {
 			name = fmt.Sprint(id)
 		}
 		t.Run(name, func(t *testing.T) {
-			s := sequencer.New[int, int](thisTest.jitter)
+			s := sequencer.New[int](thisTest.jitter, thisTest.maxSeqId)
 			gotSeqNums := make([]int, 0)
 
 			ctx, stop := context.WithCancel(context.Background())

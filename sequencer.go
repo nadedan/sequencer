@@ -6,21 +6,20 @@ import (
 	"time"
 
 	"github.com/nadedan/sequencer/pkg/cache"
-
-	"golang.org/x/exp/constraints"
 )
 
-type S[N constraints.Integer, P any] struct {
+type S[P any] struct {
 	jitter time.Duration
 
-	packets *cache.Cache[N, P]
+	packets *cache.Cache[int, P]
 
-	// nextSeqId is the next sequence id that we need to emit.
-	// once this sequence id is received, we can emit more packets.
-	nextSeqId N
-	// maxSeqId is the largest sequence id that we have received
+	// thisSeqId is the last in-order sequence id that we have received
+	thisSeqId int
+	// maxReceivedSeqId is the largest sequence id that we have received
 	// and is currenly sitting in our packets cache
-	maxSeqId N
+	maxReceivedSeqId int
+	// maxSeqId is the highest sequence number before it rolls over
+	maxSeqId int
 
 	gotNext chan struct{}
 	next    chan P
@@ -30,19 +29,20 @@ type S[N constraints.Integer, P any] struct {
 	primed bool
 }
 
-func New[N constraints.Integer, P any](jitter time.Duration) *S[N, P] {
-	s := &S[N, P]{
-		jitter:  jitter,
-		packets: cache.New[N, P](),
-		gotNext: make(chan struct{}, 10),
-		next:    make(chan P, 10),
+func New[P any](jitter time.Duration, maxSeqId int) *S[P] {
+	s := &S[P]{
+		jitter:   jitter,
+		maxSeqId: maxSeqId,
+		packets:  cache.New[int, P](),
+		gotNext:  make(chan struct{}, 10),
+		next:     make(chan P, 10),
 	}
 
 	go s.waitForNext()
 	return s
 }
 
-func (s *S[N, P]) Add(n N, p P) {
+func (s *S[P]) Add(n int, p P) {
 	s.packets.Store(n, p)
 	gotNext := false
 
@@ -50,12 +50,13 @@ func (s *S[N, P]) Add(n N, p P) {
 	switch {
 	case !s.primed:
 		s.primed = true
-		s.nextSeqId = n
+		s.thisSeqId = n
 		fallthrough
-	case n > s.maxSeqId:
-		s.maxSeqId = n
+	case n > s.maxReceivedSeqId ||
+		(s.maxReceivedSeqId-n) > s.maxSeqId/2: // detecting a rollover
+		s.maxReceivedSeqId = n
 		fallthrough
-	case n == s.nextSeqId:
+	case n == s.nextSeqId():
 		gotNext = true
 	}
 	s.mut.Unlock()
@@ -65,7 +66,7 @@ func (s *S[N, P]) Add(n N, p P) {
 	}
 }
 
-func (s *S[N, P]) Next() (*P, error) {
+func (s *S[P]) Next() (*P, error) {
 	select {
 	case p, ok := <-s.next:
 		if !ok {
@@ -77,7 +78,7 @@ func (s *S[N, P]) Next() (*P, error) {
 	}
 }
 
-func (s *S[N, P]) WaitForNext(ctx context.Context) (*P, error) {
+func (s *S[P]) WaitForNext(ctx context.Context) (*P, error) {
 	select {
 	case p, ok := <-s.next:
 		if !ok {
@@ -89,7 +90,7 @@ func (s *S[N, P]) WaitForNext(ctx context.Context) (*P, error) {
 	}
 }
 
-func (s *S[N, P]) waitForNext() {
+func (s *S[P]) waitForNext() {
 	timer := time.NewTimer(s.jitter)
 	defer timer.Stop()
 
@@ -111,23 +112,32 @@ func (s *S[N, P]) waitForNext() {
 	}
 }
 
-func (s *S[N, P]) emitPackets(timedOut bool) {
+func (s *S[P]) emitPackets(timedOut bool) {
+	//fmt.Printf("emitting packets with timedOut:%v\n", timedOut)
 	s.mut.Lock()
 	defer s.mut.Unlock()
-	if timedOut && s.maxSeqId > s.nextSeqId {
-		s.nextSeqId = s.maxSeqId
+	if timedOut && s.maxReceivedSeqId > s.nextSeqId() {
+		s.thisSeqId = s.maxReceivedSeqId
 	}
 
-	for ; s.nextSeqId <= s.maxSeqId; s.nextSeqId++ {
-		p, ok := s.packets.Load(s.nextSeqId)
+	for ; s.thisSeqId <= s.maxReceivedSeqId; s.thisSeqId = s.nextSeqId() {
+		p, ok := s.packets.Load(s.thisSeqId)
 		if !ok {
 			return
 		}
 		s.next <- p
-		s.packets.Delete(s.nextSeqId)
+		s.packets.Delete(s.thisSeqId)
 	}
 
 	if timedOut {
 		s.packets.Clear()
 	}
+}
+
+func (s *S[P]) nextSeqId() int {
+	if s.thisSeqId == s.maxSeqId {
+		return 0
+	}
+
+	return s.thisSeqId + 1
 }
